@@ -62,8 +62,17 @@ public class TweetGetter
         // 값 출력
         Console.WriteLine($"Rate Limit: {limit}");
         Console.WriteLine($"Remaining Requests: {remaining}");
-        var resetTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(resetTimestamp)).UtcDateTime;
-        Console.WriteLine($"Rate Limit Reset at: {resetTime.ToLocalTime()}");
+
+        // resetTimestamp가 null일 경우 기본값 처리
+        if (string.IsNullOrEmpty(resetTimestamp) || !long.TryParse(resetTimestamp, out var resetTimeUnix))
+        {
+            Console.WriteLine("Rate Limit Reset Time: Unknown");
+        }
+        else
+        {
+            var resetTime = DateTimeOffset.FromUnixTimeSeconds(resetTimeUnix).UtcDateTime;
+            Console.WriteLine($"Rate Limit Reset at: {resetTime.ToLocalTime()}");
+        }
 
         var errorDetails = await response.Content.ReadAsStringAsync();
         throw new HttpRequestException($"Error {response.StatusCode}: {errorDetails}");
@@ -74,7 +83,7 @@ public class TweetGetter
         private TweetData()
         {
             Id = string.Empty;
-            MediaUrls = [];
+            MediaUrls = new List<string>();
         }
 
         public TweetData(string id, List<string> mediaUrls)
