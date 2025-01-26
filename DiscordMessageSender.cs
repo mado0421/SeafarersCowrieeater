@@ -5,7 +5,7 @@ namespace SeafarersCowrieeater;
 
 public class DiscordMessageSender
 {
-    public async Task SendAsync(string token, string text, Stream imagesStream)
+    public async Task SendAsync(string token, string text, Stream? imagesStream)
     {
         DiscordSocketClient client = new DiscordSocketClient();
         await client.LoginAsync(TokenType.Bot, token);
@@ -13,8 +13,17 @@ public class DiscordMessageSender
 
         var textChannels = GetTextChannels(client);
 
-        foreach (var textChannel in textChannels) 
-            await textChannel.SendFileAsync(imagesStream, text);
+        if (imagesStream is null)
+        {
+            foreach (var textChannel in textChannels) 
+                await textChannel.SendMessageAsync(text);
+        }
+        else
+        {
+            foreach (var textChannel in textChannels) 
+                await textChannel.SendFileAsync(imagesStream, text);
+        }
+
     }
 
     /// <summary>
