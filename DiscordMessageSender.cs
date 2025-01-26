@@ -12,6 +12,9 @@ public class DiscordMessageSender
             GatewayIntents = GatewayIntents.Guilds | GatewayIntents.DirectMessages | GatewayIntents.GuildMessages
         });
         client.Log += OnLog;
+
+        var taskCompletionSource = new TaskCompletionSource();
+
         client.Ready += async () =>
         {
             var tweetLink = $"https://twitter.com/{tweetAccountId}/status/{tweetId}";
@@ -21,19 +24,22 @@ public class DiscordMessageSender
             {
                 await textChannel.SendMessageAsync(tweetLink);
 
-                foreach (var imageUrl in imageUrls) await textChannel.SendMessageAsync(imageUrl);
+                foreach (var imageUrl in imageUrls)
+                    await textChannel.SendMessageAsync(imageUrl);
             }
 
             await client.LogoutAsync();
             await client.StopAsync();
 
-            Environment.Exit(0);
+            // Ready 핸들러가 끝났음을 알림
+            taskCompletionSource.SetResult();
         };
 
         await client.LoginAsync(TokenType.Bot, token);
         await client.StartAsync();
 
-        await Task.Delay(TimeSpan.FromMinutes(1));
+        // Ready 핸들러가 끝날 때까지 대기
+        await taskCompletionSource.Task;
     }
 
     private Task OnLog(LogMessage arg)
