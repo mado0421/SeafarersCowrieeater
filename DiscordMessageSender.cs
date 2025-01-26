@@ -17,6 +17,9 @@ public class DiscordMessageSender
             await textChannel.SendFileAsync(imagesStream, text);
     }
 
+    /// <summary>
+    ///     SendMessages, AttachFiles, EmbedLinks must be Allow.
+    /// </summary>
     private IReadOnlyCollection<SocketTextChannel> GetTextChannels(DiscordSocketClient client)
     {
         List<SocketTextChannel> textChannels = [];
@@ -29,6 +32,8 @@ public class DiscordMessageSender
                 
                 if (permissions is null) continue;
                 if (permissions.Value.SendMessages is not PermValue.Allow) continue;
+                if (permissions.Value.AttachFiles is not PermValue.Allow) continue;
+                if (permissions.Value.EmbedLinks is not PermValue.Allow) continue;
                 
                 textChannels.Add(textChannel);
             }
