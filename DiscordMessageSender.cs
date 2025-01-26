@@ -5,25 +5,47 @@ namespace SeafarersCowrieeater;
 
 public class DiscordMessageSender
 {
-    public async Task SendAsync(string token, string text, Stream? imagesStream)
+    public async Task SendAsync(string token, string tweetAccountId, string tweetId, List<string> imageUrls)
     {
-        DiscordSocketClient client = new DiscordSocketClient();
+        var client = new DiscordSocketClient(new DiscordSocketConfig
+        {
+            GatewayIntents = GatewayIntents.Guilds | GatewayIntents.DirectMessages | GatewayIntents.GuildMessages
+        });
+        client.Log += OnLog;
+
+        var taskCompletionSource = new TaskCompletionSource();
+
+        client.Ready += async () =>
+        {
+            var tweetLink = $"https://twitter.com/{tweetAccountId}/status/{tweetId}";
+            IReadOnlyCollection<SocketTextChannel> textChannels = GetTextChannels(client);
+
+            foreach (var textChannel in textChannels)
+            {
+                await textChannel.SendMessageAsync(tweetLink);
+
+                foreach (var imageUrl in imageUrls)
+                    await textChannel.SendMessageAsync(imageUrl);
+            }
+
+            await client.LogoutAsync();
+            await client.StopAsync();
+
+            // Ready 핸들러가 끝났음을 알림
+            taskCompletionSource.SetResult();
+        };
+
         await client.LoginAsync(TokenType.Bot, token);
         await client.StartAsync();
 
-        var textChannels = GetTextChannels(client);
+        // Ready 핸들러가 끝날 때까지 대기
+        await taskCompletionSource.Task;
+    }
 
-        if (imagesStream is null)
-        {
-            foreach (var textChannel in textChannels) 
-                await textChannel.SendMessageAsync(text);
-        }
-        else
-        {
-            foreach (var textChannel in textChannels) 
-                await textChannel.SendFileAsync(imagesStream, text);
-        }
-
+    private Task OnLog(LogMessage arg)
+    {
+        Console.WriteLine(arg.ToString());
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -32,20 +54,18 @@ public class DiscordMessageSender
     private IReadOnlyCollection<SocketTextChannel> GetTextChannels(DiscordSocketClient client)
     {
         List<SocketTextChannel> textChannels = [];
-        
+
         foreach (var server in client.Guilds)
+        foreach (var textChannel in server.TextChannels)
         {
-            foreach (var textChannel in server.TextChannels)
-            {
-                var permissions = textChannel.GetPermissionOverwrite(client.CurrentUser);
-                
-                if (permissions is null) continue;
-                if (permissions.Value.SendMessages is not PermValue.Allow) continue;
-                if (permissions.Value.AttachFiles is not PermValue.Allow) continue;
-                if (permissions.Value.EmbedLinks is not PermValue.Allow) continue;
-                
-                textChannels.Add(textChannel);
-            }
+            var permissions = textChannel.GetPermissionOverwrite(client.CurrentUser);
+
+            if (permissions is null) continue;
+            if (permissions.Value.SendMessages is not PermValue.Allow) continue;
+            if (permissions.Value.AttachFiles is not PermValue.Allow) continue;
+            if (permissions.Value.EmbedLinks is not PermValue.Allow) continue;
+
+            textChannels.Add(textChannel);
         }
 
         return textChannels;
