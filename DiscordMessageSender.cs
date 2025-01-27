@@ -7,26 +7,30 @@ public class DiscordMessageSender
 {
     public async Task SendAsync(string token, string tweetAccountId, string tweetId, List<string> imageUrls)
     {
-        var client = new DiscordSocketClient(new DiscordSocketConfig
-        {
-            GatewayIntents = GatewayIntents.Guilds | GatewayIntents.DirectMessages | GatewayIntents.GuildMessages
-        });
-        client.Log += OnLog;
-
         var taskCompletionSource = new TaskCompletionSource();
-
+        var client = new DiscordSocketClient(
+            new DiscordSocketConfig
+            {
+                GatewayIntents = GatewayIntents.Guilds |
+                                 GatewayIntents.DirectMessages |
+                                 GatewayIntents.GuildMessages
+            }
+        );
+        
+        client.Log += OnLog;
         client.Ready += async () =>
         {
-            var tweetLink = $"https://twitter.com/{tweetAccountId}/status/{tweetId}";
             IReadOnlyCollection<SocketTextChannel> textChannels = GetTextChannels(client);
 
-            foreach (var textChannel in textChannels)
+            if (!string.IsNullOrEmpty(tweetId))
             {
-                await textChannel.SendMessageAsync(tweetLink);
-
-                foreach (var imageUrl in imageUrls)
-                    await textChannel.SendMessageAsync(imageUrl);
+                var tweetLink = $"https://twitter.com/{tweetAccountId}/status/{tweetId}";
+                foreach (var textChannel in textChannels) await textChannel.SendMessageAsync(tweetLink);
             }
+
+            foreach (var textChannel in textChannels)
+            foreach (var imageUrl in imageUrls)
+                await textChannel.SendMessageAsync(imageUrl);
 
             await client.LogoutAsync();
             await client.StopAsync();
