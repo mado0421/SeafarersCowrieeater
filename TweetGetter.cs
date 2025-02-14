@@ -10,7 +10,8 @@ public class TweetGetter
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
 
         var endpoint =
-            $"https://api.twitter.com/2/tweets/search/recent?query=from:{twitterId}%20has:images&max_results=100&expansions=attachments.media_keys&media.fields=url";
+                $"https://api.twitter.com/2/tweets/search/recent?query=from:{twitterId}%20%23무인도의고양이%20Week%20has:images&max_results=100&expansions=attachments.media_keys&media.fields=url";
+        
         var response = await client.GetAsync(endpoint);
 
         if (response.IsSuccessStatusCode)
