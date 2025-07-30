@@ -1,104 +1,148 @@
-using Newtonsoft.Json.Linq;
+using System.Net.Http.Headers;
+using Newtonsoft.Json;
 
 namespace SeafarersCowrieeater;
 
-public class TweetGetter
+public class TweetGetter(HttpClient httpClient)
 {
-    public async Task<TweetData> GetTweet(string token, string twitterId, List<string> keywords)
+    private const string TwitterApiBaseUrl = "https://api.twitter.com/2/tweets/search/recent";
+    private const string DefaultQueryParameters = "max_results=100&expansions=attachments.media_keys&media.fields=url";
+
+    private string BuildTwitterEndpoint(string authorId, IEnumerable<string> keywords)
     {
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        var keywordQuery = string.Join(" ", keywords);
+        var rawQuery = $"from:{authorId} has:images {keywordQuery}".Trim();
+        var encodedQuery = Uri.EscapeDataString(rawQuery);
 
-        var endpoint =
-                $"https://api.twitter.com/2/tweets/search/recent?query=from:{twitterId}%20%23무인도의고양이%20Week%20has:images&max_results=100&expansions=attachments.media_keys&media.fields=url";
+        return $"{TwitterApiBaseUrl}?query={encodedQuery}&{DefaultQueryParameters}";
+    }
+    
+    public async Task<TweetData> GetTweetAsync(string token, string authorId, List<string> keywords)
+    {
+        Console.WriteLine("[TweetGetter] Starting to fetch tweet...");
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         
-        var response = await client.GetAsync(endpoint);
+        var endpoint = BuildTwitterEndpoint(authorId, keywords);
+        Console.WriteLine($"[TweetGetter] Requesting Twitter API with endpoint: {endpoint}");
+        
+        var response = await httpClient.GetAsync(endpoint);
 
-        if (response.IsSuccessStatusCode)
+        var responseBody = await response.Content.ReadAsStringAsync();
+        
+        if (!response.IsSuccessStatusCode)
         {
-            var responseBody = await response.Content.ReadAsStringAsync();
-            var jObject = JObject.Parse(responseBody);
+            Console.WriteLine($"[TweetGetter] ERROR: Twitter API request failed. Status: {response.StatusCode}. Body: {responseBody}");
+            throw new HttpRequestException($"Twitter API request failed with status code {response.StatusCode}: {responseBody}");
+        }
 
-            var tweets = jObject["data"];
-            var mediaIncludes = jObject["includes"]?["media"];
+        Console.WriteLine("[TweetGetter] Successfully received response from Twitter API.");
+        var twitterResponse = JsonConvert.DeserializeObject<TwitterApiResponse>(responseBody);
 
-            if (tweets is null)
-                return TweetData.Empty;
+        return FindBestMatchingTweet(twitterResponse, authorId, keywords);
+    }
 
-            foreach (var tweet in tweets)
-            {
-                var text = tweet["text"]?.ToString() ?? string.Empty;
-                if (keywords.Any(keyword => !text.Contains(keyword))) continue;
-
-                var tweetId = tweet["id"]?.ToString() ?? string.Empty;
-
-                List<string> mediaKeys = tweet["attachments"]?["media_keys"]?
-                    .Select(jToken => jToken.ToString())
-                    .ToList() ?? new List<string>();
-                var mediaUrls = mediaKeys.Any() && mediaIncludes is not null
-                    ? mediaIncludes
-                        .Where(jToken => mediaKeys.Contains(jToken["media_key"]?.ToString() ?? string.Empty))
-                        .Select(jToken => jToken["url"]?.ToString() ?? string.Empty).ToList()
-                    : new List<string>();
-
-                return new TweetData(tweetId, mediaUrls);
-            }
-
+    private TweetData FindBestMatchingTweet(TwitterApiResponse? response, string authorId, List<string> keywords)
+    {
+        Console.WriteLine("[TweetGetter] Finding best matching tweet from API response...");
+        
+        if (keywords.Count == 0)
+        {
+            Console.WriteLine("[TweetGetter] WARN: No keywords were provided to filter tweets. Returning no match as per policy.");
             return TweetData.Empty;
         }
 
-        // 응답 헤더에서 필요한 값 추출
-        var limit = response.Headers.Contains("x-rate-limit-limit")
-            ? response.Headers.GetValues("x-rate-limit-limit").FirstOrDefault()
-            : null;
-
-        var remaining = response.Headers.Contains("x-rate-limit-remaining")
-            ? response.Headers.GetValues("x-rate-limit-remaining").FirstOrDefault()
-            : null;
-
-        var resetTimestamp = response.Headers.Contains("x-rate-limit-reset")
-            ? response.Headers.GetValues("x-rate-limit-reset").FirstOrDefault()
-            : null;
-
-        // 값 출력
-        Console.WriteLine($"Rate Limit: {limit}");
-        Console.WriteLine($"Remaining Requests: {remaining}");
-
-        // resetTimestamp가 null일 경우 기본값 처리
-        if (string.IsNullOrEmpty(resetTimestamp) || !long.TryParse(resetTimestamp, out var resetTimeUnix))
+        if (response?.Data == null || !response.Data.Any())
         {
-            Console.WriteLine("Rate Limit Reset Time: Unknown");
-        }
-        else
-        {
-            var resetTime = DateTimeOffset.FromUnixTimeSeconds(resetTimeUnix).UtcDateTime;
-            Console.WriteLine($"Rate Limit Reset at: {resetTime.ToLocalTime()}");
+            Console.WriteLine("[TweetGetter] WARN: Twitter API response contained no tweets (response.Data is null or empty).");
+            return TweetData.Empty;
         }
 
-        var errorDetails = await response.Content.ReadAsStringAsync();
-        throw new HttpRequestException($"Error {response.StatusCode}: {errorDetails}");
+        Console.WriteLine($"[TweetGetter] Received {response.Data.Count} tweets from API. Filtering now...");
+
+        var mediaDictionary = response.Includes?.Media?.ToDictionary(m => m.MediaKey) 
+                              ?? new Dictionary<string, TwitterMedia>();
+
+        foreach (var tweet in response.Data)
+        {
+            var formattedText = tweet.Text.Replace("\n", " ").Trim();
+            Console.WriteLine($"[TweetGetter] -> Checking tweet ID: {tweet.Id}, Text: \"{formattedText}\"");
+            
+            // 키워드 필터링: 모든 키워드를 포함해야 함
+            if (keywords.Any(keyword => !tweet.Text.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine($"[TweetGetter]    - Tweet {tweet.Id} did not match all keywords. Skipping.");
+                continue;
+            }
+            
+            Console.WriteLine($"[TweetGetter]    + SUCCESS: Tweet {tweet.Id} matches all keywords.");
+            
+            var mediaUrls = tweet.Attachments?.MediaKeys?
+                .Select(key => mediaDictionary.TryGetValue(key, out var media) ? media.Url : null)
+                .Where(url => url != null)
+                .ToList();
+
+            return new TweetData(tweet.Id, tweet.Text, authorId, mediaUrls!);
+        }
+
+        Console.WriteLine("[TweetGetter] WARN: Finished checking all received tweets, but none matched the criteria.");
+        return TweetData.Empty;
     }
+}
 
-    public class TweetData
-    {
-        private TweetData()
-        {
-            Id = string.Empty;
-            MediaUrls = new List<string>();
-        }
 
-        public TweetData(string id, List<string> mediaUrls)
-        {
-            if (string.IsNullOrEmpty(id)) throw new ArgumentNullException(nameof(id));
+// --- API 응답을 위한 강타입 모델들 ---
 
-            Id = id;
-            MediaUrls = mediaUrls;
-        }
+public class TwitterApiResponse
+{
+    [JsonProperty("data")]
+    public List<TwitterTweet>? Data { get; set; }
 
-        public static TweetData Empty { get; } = new();
-        public bool IsEmpty => string.IsNullOrEmpty(Id);
+    [JsonProperty("includes")]
+    public TwitterIncludes? Includes { get; set; }
+}
 
-        public string Id { get; }
-        public List<string> MediaUrls { get; }
-    }
+public class TwitterTweet
+{
+    [JsonProperty("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonProperty("text")]
+    public string Text { get; set; } = string.Empty;
+
+    [JsonProperty("attachments")]
+    public TwitterAttachments? Attachments { get; set; }
+}
+
+public class TwitterAttachments
+{
+    [JsonProperty("media_keys")]
+    public List<string>? MediaKeys { get; set; }
+}
+
+public class TwitterIncludes
+{
+    [JsonProperty("media")]
+    public List<TwitterMedia>? Media { get; set; }
+}
+
+public class TwitterMedia
+{
+    [JsonProperty("media_key")]
+    public string MediaKey { get; set; } = string.Empty;
+
+    [JsonProperty("url")]
+    public string? Url { get; set; }
+}
+
+public class TweetData(string id, string text, string authorId, List<string> mediaUrls)
+{
+    private TweetData() : this(string.Empty, string.Empty, string.Empty, []) { }
+
+    public static TweetData Empty { get; } = new();
+    public bool IsEmpty => string.IsNullOrEmpty(Id);
+
+    public string Id { get; } = id;
+    public string Text { get; } = text;
+    public string AuthorId { get; } = authorId;
+    public List<string> MediaUrls { get; } = mediaUrls;
 }
